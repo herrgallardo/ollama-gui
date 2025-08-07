@@ -1,5 +1,5 @@
-const Home = () => {
-  return <div></div>
-}
+import Chat from "@/components/Chat"
 
-export default Home
+export default function Home() {
+  return <Chat />
+}
