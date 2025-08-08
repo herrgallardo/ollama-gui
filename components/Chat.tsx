@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -14,7 +15,7 @@ import {
 import { Message, OllamaModel } from "@/lib/types"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { Send, StopCircle, Bot, User } from "lucide-react"
+import { Send, StopCircle, User } from "lucide-react"
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -197,7 +198,7 @@ export default function Chat() {
     }
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       sendMessage()
@@ -209,7 +210,16 @@ export default function Chat() {
       {/* Header */}
       <div className="border-b p-4">
         <div className="flex items-center justify-between max-w-4xl mx-auto">
-          <h1 className="text-2xl font-bold">Ollama Chat</h1>
+          <div className="flex items-center gap-3">
+            <Image
+              src="/llama-icon.png"
+              alt="Ollama"
+              width={32}
+              height={32}
+              className="rounded-md"
+            />
+            <h1 className="text-2xl font-bold">Ollama Chat</h1>
+          </div>
           <Select value={selectedModel} onValueChange={setSelectedModel}>
             <SelectTrigger className="w-[200px]">
               <SelectValue placeholder="Select a model" />
@@ -230,7 +240,18 @@ export default function Chat() {
         <div className="max-w-4xl mx-auto space-y-4" ref={scrollAreaRef}>
           {messages.length === 0 && (
             <div className="text-center text-muted-foreground py-12">
-              <Bot className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <div className="w-16 h-16 mx-auto mb-4 opacity-50">
+                <Image
+                  src="/llama-icon.png"
+                  alt="Ollama"
+                  width={64}
+                  height={64}
+                  className="rounded-lg"
+                />
+              </div>
+              <p className="text-lg font-medium mb-2">
+                Welcome to Ollama Chat!
+              </p>
               <p>Start a conversation by sending a message below</p>
             </div>
           )}
@@ -247,17 +268,19 @@ export default function Chat() {
                   message.role === "assistant" ? "flex-row" : "flex-row-reverse"
                 }`}
               >
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    message.role === "assistant"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-secondary text-secondary-foreground"
-                  }`}
-                >
+                <div className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
                   {message.role === "assistant" ? (
-                    <Bot className="w-4 h-4" />
+                    <Image
+                      src="/llama-icon.png"
+                      alt="Ollama"
+                      width={32}
+                      height={32}
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
-                    <User className="w-4 h-4" />
+                    <div className="w-full h-full bg-secondary flex items-center justify-center">
+                      <User className="w-4 h-4 text-secondary-foreground" />
+                    </div>
                   )}
                 </div>
                 <div
@@ -277,7 +300,7 @@ export default function Chat() {
                     <p className="whitespace-pre-wrap">{message.content}</p>
                   )}
                   {message.isStreaming && (
-                    <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse" />
+                    <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse-cursor" />
                   )}
                 </div>
               </div>
@@ -298,7 +321,7 @@ export default function Chat() {
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             placeholder="Type your message..."
             disabled={isLoading || !selectedModel}
             className="flex-1"
