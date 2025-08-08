@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,24 +13,71 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Message, OllamaModel } from "@/lib/types"
+import { useChatStore } from "@/lib/store"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { Send, StopCircle, User } from "lucide-react"
+import { Send, StopCircle, User, Trash2, AlertCircle } from "lucide-react"
 
 export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([])
+  // Zustand store
+  const {
+    messages,
+    selectedModel,
+    isLoading,
+    error,
+    hasHydrated,
+    addMessage,
+    updateMessage,
+    clearMessages,
+    setSelectedModel,
+    setLoading,
+    setError,
+  } = useChatStore()
+
+  // Local state for input and models
   const [input, setInput] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
   const [models, setModels] = useState<OllamaModel[]>([])
-  const [selectedModel, setSelectedModel] = useState<string>("")
-  const [error, setError] = useState<string | null>(null)
+  const [modelsLoaded, setModelsLoaded] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
 
-  // Fetch available models on mount
+  // Fetch models
+  const fetchModels = useCallback(async () => {
+    try {
+      const response = await fetch("/api/models")
+      if (!response.ok) {
+        throw new Error("Failed to fetch models")
+      }
+      const data = await response.json()
+      const availableModels = data.models || []
+      setModels(availableModels)
+      setModelsLoaded(true)
+
+      // Only set default model if none is selected AND we've hydrated
+      if (hasHydrated && availableModels.length > 0) {
+        // Check if the selected model exists in available models
+        const modelExists = availableModels.some(
+          (m: OllamaModel) => m.name === selectedModel
+        )
+
+        if (!selectedModel || !modelExists) {
+          // Set to first available model if current selection is invalid
+          setSelectedModel(availableModels[0].name)
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching models:", error)
+      setError("Failed to fetch models. Make sure Ollama is running.")
+      setModelsLoaded(true)
+    }
+  }, [selectedModel, setSelectedModel, setError, hasHydrated])
+
+  // Fetch models after hydration
   useEffect(() => {
-    fetchModels()
-  }, [])
+    if (hasHydrated) {
+      fetchModels()
+    }
+  }, [hasHydrated, fetchModels])
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -38,25 +85,6 @@ export default function Chat() {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight
     }
   }, [messages])
-
-  const fetchModels = async () => {
-    try {
-      const response = await fetch("/api/models")
-      if (!response.ok) {
-        throw new Error("Failed to fetch models")
-      }
-      const data = await response.json()
-      setModels(data.models || [])
-
-      // Set default model if available
-      if (data.models && data.models.length > 0) {
-        setSelectedModel(data.models[0].name)
-      }
-    } catch (error) {
-      console.error("Error fetching models:", error)
-      setError("Failed to fetch models. Make sure Ollama is running.")
-    }
-  }
 
   const sendMessage = async () => {
     if (!input.trim() || !selectedModel) return
@@ -68,10 +96,10 @@ export default function Chat() {
       timestamp: new Date(),
     }
 
-    // Add user message and create placeholder for assistant
-    setMessages((prev) => [...prev, userMessage])
+    // Add user message
+    addMessage(userMessage)
     setInput("")
-    setIsLoading(true)
+    setLoading(true)
     setError(null)
 
     const assistantMessage: Message = {
@@ -83,7 +111,8 @@ export default function Chat() {
       model: selectedModel,
     }
 
-    setMessages((prev) => [...prev, assistantMessage])
+    // Add placeholder for assistant
+    addMessage(assistantMessage)
 
     try {
       // Create abort controller for this request
@@ -130,13 +159,7 @@ export default function Chat() {
             const data = line.slice(6)
 
             if (data === "[DONE]") {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMessage.id
-                    ? { ...m, isStreaming: false }
-                    : m
-                )
-              )
+              updateMessage(assistantMessage.id, { isStreaming: false })
               break
             }
 
@@ -144,13 +167,7 @@ export default function Chat() {
               const parsed = JSON.parse(data)
               if (parsed.content) {
                 fullContent += parsed.content
-                setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === assistantMessage.id
-                      ? { ...m, content: fullContent }
-                      : m
-                  )
-                )
+                updateMessage(assistantMessage.id, { content: fullContent })
               }
             } catch (e) {
               console.error("Error parsing SSE data:", e)
@@ -162,24 +179,14 @@ export default function Chat() {
       if (error instanceof Error) {
         if (error.name === "AbortError") {
           console.log("Request aborted")
+          updateMessage(assistantMessage.id, { isStreaming: false })
         } else {
           console.error("Error sending message:", error)
           setError(error.message || "Failed to send message")
-
-          // Remove the empty assistant message on error
-          setMessages((prev) =>
-            prev.filter((m) => m.id !== assistantMessage.id)
-          )
         }
-      } else {
-        console.error("Error sending message:", error)
-        setError("Failed to send message")
-
-        // Remove the empty assistant message on error
-        setMessages((prev) => prev.filter((m) => m.id !== assistantMessage.id))
       }
     } finally {
-      setIsLoading(false)
+      setLoading(false)
       abortControllerRef.current = null
     }
   }
@@ -187,14 +194,7 @@ export default function Chat() {
   const stopStreaming = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
-      setIsLoading(false)
-
-      // Mark the last message as no longer streaming
-      setMessages((prev) =>
-        prev.map((m, i) =>
-          i === prev.length - 1 ? { ...m, isStreaming: false } : m
-        )
-      )
+      setLoading(false)
     }
   }
 
@@ -203,6 +203,15 @@ export default function Chat() {
       e.preventDefault()
       sendMessage()
     }
+  }
+
+  // Don't render until hydrated to prevent mismatch
+  if (!hasHydrated) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    )
   }
 
   return (
@@ -220,18 +229,33 @@ export default function Chat() {
             />
             <h1 className="text-2xl font-bold">Ollama Chat</h1>
           </div>
-          <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger className="w-[200px]">
-              <SelectValue placeholder="Select a model" />
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((model) => (
-                <SelectItem key={model.name} value={model.name}>
-                  {model.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={clearMessages}
+              variant="ghost"
+              size="icon"
+              disabled={messages.length === 0 || isLoading}
+              title="Clear chat"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+            <Select
+              value={selectedModel}
+              onValueChange={setSelectedModel}
+              disabled={!modelsLoaded}
+            >
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((model) => (
+                  <SelectItem key={model.name} value={model.name}>
+                    {model.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
@@ -253,6 +277,11 @@ export default function Chat() {
                 Welcome to Ollama Chat!
               </p>
               <p>Start a conversation by sending a message below</p>
+              {selectedModel && (
+                <p className="text-sm mt-2 text-muted-foreground">
+                  Using model: {selectedModel}
+                </p>
+              )}
             </div>
           )}
 
@@ -308,8 +337,9 @@ export default function Chat() {
           ))}
 
           {error && (
-            <div className="text-center text-destructive py-2">
-              <p>{error}</p>
+            <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-4 py-2 rounded-lg">
+              <AlertCircle className="w-4 h-4" />
+              <p className="text-sm">{error}</p>
             </div>
           )}
         </div>
@@ -340,7 +370,7 @@ export default function Chat() {
             </Button>
           )}
         </div>
-        {!selectedModel && models.length === 0 && (
+        {!selectedModel && models.length === 0 && modelsLoaded && (
           <p className="text-center text-sm text-muted-foreground mt-2">
             No models found. Make sure Ollama is running and has models
             installed.
