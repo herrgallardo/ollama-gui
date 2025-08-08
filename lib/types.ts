@@ -8,6 +8,20 @@ export interface Message {
   timestamp: Date
   isStreaming?: boolean
   model?: string
+  metrics?: MessageMetrics // Add this line
+}
+
+/**
+ * Performance metrics for a message
+ */
+export interface MessageMetrics {
+  totalDuration?: number // Total time in nanoseconds
+  loadDuration?: number // Model loading time
+  promptEvalCount?: number // Number of tokens in prompt
+  promptEvalDuration?: number // Time spent evaluating prompt
+  evalCount?: number // Number of tokens generated
+  evalDuration?: number // Time spent generating
+  tokensPerSecond?: number // Calculated tokens/second
 }
 
 /**
@@ -87,4 +101,15 @@ export interface Settings {
   maxTokens: number
   theme: "light" | "dark" | "system"
   streamingEnabled: boolean
+  showMetrics: boolean // Add this line
+}
+
+/**
+ * System resource information
+ */
+export interface SystemResources {
+  cpuUsage?: number
+  memoryUsage?: number
+  modelSize?: string
+  quantization?: string
 }

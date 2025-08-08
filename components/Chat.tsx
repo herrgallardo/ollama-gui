@@ -12,11 +12,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Message, OllamaModel } from "@/lib/types"
+import { Message, OllamaModel, MessageMetrics } from "@/lib/types"
 import { useChatStore } from "@/lib/store"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { Send, StopCircle, User, Trash2, AlertCircle } from "lucide-react"
+import MetricsDisplay from "@/components/MetricsDisplay"
+import {
+  Send,
+  StopCircle,
+  User,
+  Trash2,
+  AlertCircle,
+  Activity,
+  Eye,
+  EyeOff,
+} from "lucide-react"
 
 export default function Chat() {
   // Zustand store
@@ -26,12 +36,16 @@ export default function Chat() {
     isLoading,
     error,
     hasHydrated,
+    showMetrics,
+    currentMetrics,
     addMessage,
     updateMessage,
     clearMessages,
     setSelectedModel,
     setLoading,
     setError,
+    setShowMetrics,
+    setCurrentMetrics,
   } = useChatStore()
 
   // Local state for input and models
@@ -40,6 +54,9 @@ export default function Chat() {
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
+
+  // Find current model info
+  const currentModelInfo = models.find((m) => m.name === selectedModel)
 
   // Fetch models
   const fetchModels = useCallback(async () => {
@@ -101,6 +118,7 @@ export default function Chat() {
     setInput("")
     setLoading(true)
     setError(null)
+    setCurrentMetrics(null) // Clear previous metrics
 
     const assistantMessage: Message = {
       id: (Date.now() + 1).toString(),
@@ -145,6 +163,7 @@ export default function Chat() {
       }
 
       let fullContent = ""
+      let messageMetrics: MessageMetrics | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -159,15 +178,35 @@ export default function Chat() {
             const data = line.slice(6)
 
             if (data === "[DONE]") {
-              updateMessage(assistantMessage.id, { isStreaming: false })
+              // Update message with final metrics
+              updateMessage(assistantMessage.id, {
+                isStreaming: false,
+                metrics: messageMetrics || undefined,
+              })
+              setCurrentMetrics(null)
               break
             }
 
             try {
               const parsed = JSON.parse(data)
+
+              // Handle content updates
               if (parsed.content) {
                 fullContent += parsed.content
                 updateMessage(assistantMessage.id, { content: fullContent })
+              }
+
+              // Handle metrics updates
+              if (parsed.metrics) {
+                messageMetrics = parsed.metrics
+                setCurrentMetrics(parsed.metrics)
+
+                // If this is the final metrics update, attach to message
+                if (parsed.done) {
+                  updateMessage(assistantMessage.id, {
+                    metrics: parsed.metrics,
+                  })
+                }
               }
             } catch (e) {
               console.error("Error parsing SSE data:", e)
@@ -187,6 +226,7 @@ export default function Chat() {
       }
     } finally {
       setLoading(false)
+      setCurrentMetrics(null)
       abortControllerRef.current = null
     }
   }
@@ -195,6 +235,7 @@ export default function Chat() {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
       setLoading(false)
+      setCurrentMetrics(null)
     }
   }
 
@@ -218,7 +259,7 @@ export default function Chat() {
     <div className="flex flex-col h-screen bg-background">
       {/* Header */}
       <div className="border-b p-4">
-        <div className="flex items-center justify-between max-w-4xl mx-auto">
+        <div className="flex items-center justify-between max-w-6xl mx-auto">
           <div className="flex items-center gap-3">
             <Image
               src="/llama-icon.png"
@@ -230,6 +271,18 @@ export default function Chat() {
             <h1 className="text-2xl font-bold">Ollama Chat</h1>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              onClick={() => setShowMetrics(!showMetrics)}
+              variant="ghost"
+              size="icon"
+              title={showMetrics ? "Hide metrics" : "Show metrics"}
+            >
+              {showMetrics ? (
+                <EyeOff className="w-4 h-4" />
+              ) : (
+                <Eye className="w-4 h-4" />
+              )}
+            </Button>
             <Button
               onClick={clearMessages}
               variant="ghost"
@@ -259,91 +312,139 @@ export default function Chat() {
         </div>
       </div>
 
-      {/* Messages */}
-      <ScrollArea className="flex-1 p-4">
-        <div className="max-w-4xl mx-auto space-y-4" ref={scrollAreaRef}>
-          {messages.length === 0 && (
-            <div className="text-center text-muted-foreground py-12">
-              <div className="w-16 h-16 mx-auto mb-4 opacity-50">
-                <Image
-                  src="/llama-icon.png"
-                  alt="Ollama"
-                  width={64}
-                  height={64}
-                  className="rounded-lg"
-                />
-              </div>
-              <p className="text-lg font-medium mb-2">
-                Welcome to Ollama Chat!
-              </p>
-              <p>Start a conversation by sending a message below</p>
-              {selectedModel && (
-                <p className="text-sm mt-2 text-muted-foreground">
-                  Using model: {selectedModel}
-                </p>
-              )}
-            </div>
-          )}
-
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex gap-3 ${
-                message.role === "assistant" ? "justify-start" : "justify-end"
-              }`}
-            >
-              <div
-                className={`flex gap-3 max-w-[80%] ${
-                  message.role === "assistant" ? "flex-row" : "flex-row-reverse"
-                }`}
-              >
-                <div className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
-                  {message.role === "assistant" ? (
+      {/* Main Content Area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Chat Area */}
+        <div className="flex-1 flex flex-col">
+          {/* Messages */}
+          <ScrollArea className="flex-1 p-4">
+            <div className="max-w-4xl mx-auto space-y-4" ref={scrollAreaRef}>
+              {messages.length === 0 && (
+                <div className="text-center text-muted-foreground py-12">
+                  <div className="w-16 h-16 mx-auto mb-4 opacity-50">
                     <Image
                       src="/llama-icon.png"
                       alt="Ollama"
-                      width={32}
-                      height={32}
-                      className="w-full h-full object-cover"
+                      width={64}
+                      height={64}
+                      className="rounded-lg"
                     />
-                  ) : (
-                    <div className="w-full h-full bg-secondary flex items-center justify-center">
-                      <User className="w-4 h-4 text-secondary-foreground" />
-                    </div>
+                  </div>
+                  <p className="text-lg font-medium mb-2">
+                    Welcome to Ollama Chat!
+                  </p>
+                  <p>Start a conversation by sending a message below</p>
+                  {selectedModel && (
+                    <p className="text-sm mt-2 text-muted-foreground">
+                      Using model: {selectedModel}
+                    </p>
                   )}
                 </div>
-                <div
-                  className={`rounded-lg px-4 py-2 ${
-                    message.role === "assistant"
-                      ? "bg-muted"
-                      : "bg-primary text-primary-foreground"
-                  }`}
-                >
-                  {message.role === "assistant" ? (
-                    <div className="prose prose-sm dark:prose-invert max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {message.content}
-                      </ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className="whitespace-pre-wrap">{message.content}</p>
-                  )}
-                  {message.isStreaming && (
-                    <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse-cursor" />
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
+              )}
 
-          {error && (
-            <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-4 py-2 rounded-lg">
-              <AlertCircle className="w-4 h-4" />
-              <p className="text-sm">{error}</p>
+              {messages.map((message) => (
+                <div key={message.id} className="space-y-2">
+                  <div
+                    className={`flex gap-3 ${
+                      message.role === "assistant"
+                        ? "justify-start"
+                        : "justify-end"
+                    }`}
+                  >
+                    <div
+                      className={`flex gap-3 max-w-[80%] ${
+                        message.role === "assistant"
+                          ? "flex-row"
+                          : "flex-row-reverse"
+                      }`}
+                    >
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
+                        {message.role === "assistant" ? (
+                          <Image
+                            src="/llama-icon.png"
+                            alt="Ollama"
+                            width={32}
+                            height={32}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-secondary flex items-center justify-center">
+                            <User className="w-4 h-4 text-secondary-foreground" />
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        className={`rounded-lg px-4 py-2 ${
+                          message.role === "assistant"
+                            ? "bg-muted"
+                            : "bg-primary text-primary-foreground"
+                        }`}
+                      >
+                        {message.role === "assistant" ? (
+                          <div className="prose prose-sm dark:prose-invert max-w-none">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {message.content}
+                            </ReactMarkdown>
+                          </div>
+                        ) : (
+                          <p className="whitespace-pre-wrap">
+                            {message.content}
+                          </p>
+                        )}
+                        {message.isStreaming && (
+                          <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse-cursor" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Show metrics for completed assistant messages */}
+                  {message.role === "assistant" &&
+                    message.metrics &&
+                    showMetrics &&
+                    !message.isStreaming && (
+                      <div className="flex justify-start pl-11">
+                        <MetricsDisplay
+                          metrics={message.metrics}
+                          model={message.model}
+                          modelInfo={models.find(
+                            (m) => m.name === message.model
+                          )}
+                          className="max-w-sm"
+                        />
+                      </div>
+                    )}
+                </div>
+              ))}
+
+              {error && (
+                <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-4 py-2 rounded-lg">
+                  <AlertCircle className="w-4 h-4" />
+                  <p className="text-sm">{error}</p>
+                </div>
+              )}
             </div>
-          )}
+          </ScrollArea>
         </div>
-      </ScrollArea>
+
+        {/* Live Metrics Sidebar */}
+        {showMetrics && (isLoading || currentMetrics) && (
+          <div className="w-80 border-l p-4 bg-muted/5">
+            <div className="sticky top-0">
+              <div className="flex items-center gap-2 mb-4">
+                <Activity className="w-4 h-4 text-primary" />
+                <h3 className="font-semibold">Live Performance</h3>
+              </div>
+              <MetricsDisplay
+                metrics={currentMetrics || undefined}
+                model={selectedModel}
+                modelInfo={currentModelInfo}
+                isStreaming={isLoading}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Input */}
       <div className="border-t p-4">

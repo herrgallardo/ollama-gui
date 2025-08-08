@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { Message } from "@/lib/types"
+import { Message, MessageMetrics } from "@/lib/types"
 
 // Configure for streaming
 export const runtime = "nodejs"
@@ -68,11 +68,19 @@ export async function POST(request: NextRequest) {
           return
         }
 
+        let metrics: MessageMetrics = {}
+
         try {
           while (true) {
             const { done, value } = await reader.read()
 
             if (done) {
+              // Send final metrics if available
+              if (Object.keys(metrics).length > 0) {
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ metrics })}\n\n`)
+                )
+              }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"))
               controller.close()
               break
@@ -97,6 +105,34 @@ export async function POST(request: NextRequest) {
                     // Send as Server-Sent Event format
                     controller.enqueue(
                       encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+                    )
+                  }
+
+                  // Capture metrics when the response is done
+                  if (json.done) {
+                    metrics = {
+                      totalDuration: json.total_duration,
+                      loadDuration: json.load_duration,
+                      promptEvalCount: json.prompt_eval_count,
+                      promptEvalDuration: json.prompt_eval_duration,
+                      evalCount: json.eval_count,
+                      evalDuration: json.eval_duration,
+                    }
+
+                    // Calculate tokens per second
+                    if (json.eval_count && json.eval_duration) {
+                      metrics.tokensPerSecond =
+                        json.eval_count / (json.eval_duration / 1_000_000_000)
+                    }
+
+                    // Send metrics update
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({
+                          metrics,
+                          done: true,
+                        })}\n\n`
+                      )
                     )
                   }
                 } catch (e) {

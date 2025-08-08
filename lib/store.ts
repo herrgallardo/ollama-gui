@@ -1,6 +1,6 @@
 import { create } from "zustand"
 import { persist, createJSONStorage } from "zustand/middleware"
-import { Message } from "./types"
+import { Message, MessageMetrics } from "./types"
 
 interface ChatStore {
   // State
@@ -9,6 +9,8 @@ interface ChatStore {
   isLoading: boolean
   error: string | null
   hasHydrated: boolean
+  showMetrics: boolean
+  currentMetrics: MessageMetrics | null
 
   // Actions
   addMessage: (message: Message) => void
@@ -18,6 +20,8 @@ interface ChatStore {
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setHasHydrated: (hydrated: boolean) => void
+  setShowMetrics: (show: boolean) => void
+  setCurrentMetrics: (metrics: MessageMetrics | null) => void
 
   // Helper to get the last message
   getLastMessage: () => Message | undefined
@@ -32,6 +36,8 @@ export const useChatStore = create<ChatStore>()(
       isLoading: false,
       error: null,
       hasHydrated: false,
+      showMetrics: true,
+      currentMetrics: null,
 
       // Actions
       addMessage: (message) =>
@@ -51,6 +57,7 @@ export const useChatStore = create<ChatStore>()(
         set({
           messages: [],
           error: null,
+          currentMetrics: null,
         }),
 
       setSelectedModel: (model) => set({ selectedModel: model }),
@@ -60,6 +67,10 @@ export const useChatStore = create<ChatStore>()(
       setError: (error) => set({ error }),
 
       setHasHydrated: (hydrated) => set({ hasHydrated: hydrated }),
+
+      setShowMetrics: (show) => set({ showMetrics: show }),
+
+      setCurrentMetrics: (metrics) => set({ currentMetrics: metrics }),
 
       getLastMessage: () => {
         const state = get()
@@ -73,6 +84,7 @@ export const useChatStore = create<ChatStore>()(
         // Only persist these fields
         messages: state.messages,
         selectedModel: state.selectedModel,
+        showMetrics: state.showMetrics,
       }),
       onRehydrateStorage: () => (state) => {
         // This runs after hydration
