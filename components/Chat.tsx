@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -26,27 +26,40 @@ import {
   Activity,
   Eye,
   EyeOff,
+  MessageSquarePlus,
+  Menu,
 } from "lucide-react"
 
 export default function Chat() {
   // Zustand store
   const {
-    messages,
+    conversations,
     selectedModel,
     isLoading,
     error,
     hasHydrated,
     showMetrics,
     currentMetrics,
+    showSidebar,
+    getCurrentConversation,
+    createConversation,
     addMessage,
     updateMessage,
-    clearMessages,
+    clearCurrentMessages,
     setSelectedModel,
     setLoading,
     setError,
     setShowMetrics,
     setCurrentMetrics,
+    setShowSidebar,
   } = useChatStore()
+
+  // Get current conversation and messages
+  const currentConversation = getCurrentConversation()
+  const messages = useMemo(
+    () => currentConversation?.messages || [],
+    [currentConversation]
+  )
 
   // Local state for input and models
   const [input, setInput] = useState("")
@@ -54,6 +67,7 @@ export default function Chat() {
   const [modelsLoaded, setModelsLoaded] = useState(false)
   const abortControllerRef = useRef<AbortController | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Find current model info
   const currentModelInfo = models.find((m) => m.name === selectedModel)
@@ -98,10 +112,15 @@ export default function Chat() {
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  const handleNewChat = () => {
+    createConversation("New Chat", selectedModel)
+    setInput("")
+    setError(null)
+    setCurrentMetrics(null)
+  }
 
   const sendMessage = async () => {
     if (!input.trim() || !selectedModel) return
@@ -256,11 +275,19 @@ export default function Chat() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="border-b p-4">
+      <div className="border-b p-4 flex-shrink-0">
         <div className="flex items-center justify-between max-w-6xl mx-auto">
           <div className="flex items-center gap-3">
+            <Button
+              onClick={() => setShowSidebar(!showSidebar)}
+              variant="ghost"
+              size="icon"
+              title="Toggle sidebar"
+            >
+              <Menu className="w-4 h-4" />
+            </Button>
             <Image
               src="/llama-icon.png"
               alt="Ollama"
@@ -268,9 +295,22 @@ export default function Chat() {
               height={32}
               className="rounded-md"
             />
-            <h1 className="text-2xl font-bold">Ollama Chat</h1>
+            <h1 className="text-xl font-bold hidden sm:block">Ollama Chat</h1>
+            {currentConversation && (
+              <span className="text-sm text-muted-foreground truncate max-w-[200px]">
+                {currentConversation.title}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              onClick={handleNewChat}
+              variant="ghost"
+              size="icon"
+              title="New chat"
+            >
+              <MessageSquarePlus className="w-4 h-4" />
+            </Button>
             <Button
               onClick={() => setShowMetrics(!showMetrics)}
               variant="ghost"
@@ -284,11 +324,11 @@ export default function Chat() {
               )}
             </Button>
             <Button
-              onClick={clearMessages}
+              onClick={clearCurrentMessages}
               variant="ghost"
               size="icon"
               disabled={messages.length === 0 || isLoading}
-              title="Clear chat"
+              title="Clear current chat"
             >
               <Trash2 className="w-4 h-4" />
             </Button>
@@ -297,7 +337,7 @@ export default function Chat() {
               onValueChange={setSelectedModel}
               disabled={!modelsLoaded}
             >
-              <SelectTrigger className="w-[200px]">
+              <SelectTrigger className="w-[200px] hidden sm:flex">
                 <SelectValue placeholder="Select a model" />
               </SelectTrigger>
               <SelectContent>
@@ -313,12 +353,12 @@ export default function Chat() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Chat Area */}
-        <div className="flex-1 flex flex-col">
-          {/* Messages */}
-          <ScrollArea className="flex-1 p-4">
-            <div className="max-w-4xl mx-auto space-y-4" ref={scrollAreaRef}>
+      <div className="flex-1 flex min-h-0">
+        {/* Chat Messages Container */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Messages Scroll Area */}
+          <div className="flex-1 overflow-y-auto" ref={scrollAreaRef}>
+            <div className="max-w-4xl mx-auto p-4">
               {messages.length === 0 && (
                 <div className="text-center text-muted-foreground py-12">
                   <div className="w-16 h-16 mx-auto mb-4 opacity-50">
@@ -331,9 +371,15 @@ export default function Chat() {
                     />
                   </div>
                   <p className="text-lg font-medium mb-2">
-                    Welcome to Ollama Chat!
+                    {conversations.length === 0
+                      ? "Welcome to Ollama Chat!"
+                      : "Start a new conversation"}
                   </p>
-                  <p>Start a conversation by sending a message below</p>
+                  <p>
+                    {conversations.length === 0
+                      ? "Send a message below to begin"
+                      : "Type a message or select a conversation from the sidebar"}
+                  </p>
                   {selectedModel && (
                     <p className="text-sm mt-2 text-muted-foreground">
                       Using model: {selectedModel}
@@ -342,118 +388,129 @@ export default function Chat() {
                 </div>
               )}
 
-              {messages.map((message) => (
-                <div key={message.id} className="space-y-2">
-                  <div
-                    className={`flex gap-3 ${
-                      message.role === "assistant"
-                        ? "justify-start"
-                        : "justify-end"
-                    }`}
-                  >
+              <div className="space-y-4">
+                {messages.map((message) => (
+                  <div key={message.id} className="space-y-2">
                     <div
-                      className={`flex gap-3 max-w-[80%] ${
+                      className={`flex gap-3 ${
                         message.role === "assistant"
-                          ? "flex-row"
-                          : "flex-row-reverse"
+                          ? "justify-start"
+                          : "justify-end"
                       }`}
                     >
-                      <div className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
-                        {message.role === "assistant" ? (
-                          <Image
-                            src="/llama-icon.png"
-                            alt="Ollama"
-                            width={32}
-                            height={32}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full bg-secondary flex items-center justify-center">
-                            <User className="w-4 h-4 text-secondary-foreground" />
-                          </div>
-                        )}
-                      </div>
                       <div
-                        className={`rounded-lg px-4 py-2 ${
+                        className={`flex gap-3 max-w-[80%] ${
                           message.role === "assistant"
-                            ? "bg-muted"
-                            : "bg-primary text-primary-foreground"
+                            ? "flex-row"
+                            : "flex-row-reverse"
                         }`}
                       >
-                        {message.role === "assistant" ? (
-                          <div className="prose prose-sm dark:prose-invert max-w-none">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden flex-shrink-0">
+                          {message.role === "assistant" ? (
+                            <Image
+                              src="/llama-icon.png"
+                              alt="Ollama"
+                              width={32}
+                              height={32}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full bg-secondary flex items-center justify-center">
+                              <User className="w-4 h-4 text-secondary-foreground" />
+                            </div>
+                          )}
+                        </div>
+                        <div
+                          className={`rounded-lg px-4 py-2 ${
+                            message.role === "assistant"
+                              ? "bg-muted"
+                              : "bg-primary text-primary-foreground"
+                          }`}
+                        >
+                          {message.role === "assistant" ? (
+                            <div className="prose prose-sm dark:prose-invert max-w-none">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {message.content}
+                              </ReactMarkdown>
+                            </div>
+                          ) : (
+                            <p className="whitespace-pre-wrap">
                               {message.content}
-                            </ReactMarkdown>
-                          </div>
-                        ) : (
-                          <p className="whitespace-pre-wrap">
-                            {message.content}
-                          </p>
-                        )}
-                        {message.isStreaming && (
-                          <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse-cursor" />
-                        )}
+                            </p>
+                          )}
+                          {message.isStreaming && (
+                            <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse-cursor" />
+                          )}
+                        </div>
                       </div>
                     </div>
+
+                    {/* Show metrics for completed assistant messages */}
+                    {message.role === "assistant" &&
+                      message.metrics &&
+                      showMetrics &&
+                      !message.isStreaming && (
+                        <div className="flex justify-start pl-11">
+                          <MetricsDisplay
+                            metrics={message.metrics}
+                            model={message.model}
+                            modelInfo={models.find(
+                              (m) => m.name === message.model
+                            )}
+                            className="max-w-sm"
+                          />
+                        </div>
+                      )}
                   </div>
+                ))}
 
-                  {/* Show metrics for completed assistant messages */}
-                  {message.role === "assistant" &&
-                    message.metrics &&
-                    showMetrics &&
-                    !message.isStreaming && (
-                      <div className="flex justify-start pl-11">
-                        <MetricsDisplay
-                          metrics={message.metrics}
-                          model={message.model}
-                          modelInfo={models.find(
-                            (m) => m.name === message.model
-                          )}
-                          className="max-w-sm"
-                        />
-                      </div>
-                    )}
-                </div>
-              ))}
+                {error && (
+                  <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-4 py-2 rounded-lg">
+                    <AlertCircle className="w-4 h-4" />
+                    <p className="text-sm">{error}</p>
+                  </div>
+                )}
+              </div>
 
-              {error && (
-                <div className="flex items-center gap-2 text-destructive bg-destructive/10 px-4 py-2 rounded-lg">
-                  <AlertCircle className="w-4 h-4" />
-                  <p className="text-sm">{error}</p>
-                </div>
-              )}
+              {/* Scroll anchor */}
+              <div ref={messagesEndRef} />
             </div>
-          </ScrollArea>
+          </div>
         </div>
 
         {/* Live Metrics Sidebar */}
         {showMetrics && (isLoading || currentMetrics) && (
-          <div className="w-80 border-l p-4 bg-muted/5">
-            <div className="sticky top-0">
-              <div className="flex items-center gap-2 mb-4">
-                <Activity className="w-4 h-4 text-primary" />
-                <h3 className="font-semibold">Live Performance</h3>
+          <div className="w-80 border-l bg-muted/5 flex-shrink-0">
+            <div className="p-4 h-full overflow-y-auto">
+              <div className="sticky top-0">
+                <div className="flex items-center gap-2 mb-4">
+                  <Activity className="w-4 h-4 text-primary" />
+                  <h3 className="font-semibold">Live Performance</h3>
+                </div>
+                <MetricsDisplay
+                  metrics={currentMetrics || undefined}
+                  model={selectedModel}
+                  modelInfo={currentModelInfo}
+                  isStreaming={isLoading}
+                />
               </div>
-              <MetricsDisplay
-                metrics={currentMetrics || undefined}
-                model={selectedModel}
-                modelInfo={currentModelInfo}
-                isStreaming={isLoading}
-              />
             </div>
           </div>
         )}
       </div>
 
-      {/* Input */}
-      <div className="border-t p-4">
+      {/* Input Area */}
+      <div className="border-t p-4 flex-shrink-0">
         <div className="max-w-4xl mx-auto flex gap-2">
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type your message..."
+            placeholder={
+              conversations.length === 0
+                ? "Start your first conversation..."
+                : "Type your message..."
+            }
             disabled={isLoading || !selectedModel}
             className="flex-1"
           />

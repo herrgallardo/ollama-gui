@@ -8,7 +8,7 @@ export interface Message {
   timestamp: Date
   isStreaming?: boolean
   model?: string
-  metrics?: MessageMetrics // Add this line
+  metrics?: MessageMetrics
 }
 
 /**
@@ -22,6 +22,20 @@ export interface MessageMetrics {
   evalCount?: number // Number of tokens generated
   evalDuration?: number // Time spent generating
   tokensPerSecond?: number // Calculated tokens/second
+}
+
+/**
+ * Represents a conversation/chat session
+ */
+export interface Conversation {
+  id: string
+  title: string
+  messages: Message[]
+  model: string
+  createdAt: Date
+  updatedAt: Date
+  isPinned?: boolean
+  tags?: string[]
 }
 
 /**
@@ -81,18 +95,6 @@ export interface StreamingResponse {
 }
 
 /**
- * Conversation/Chat session
- */
-export interface Conversation {
-  id: string
-  title: string
-  messages: Message[]
-  model: string
-  createdAt: Date
-  updatedAt: Date
-}
-
-/**
  * Application settings
  */
 export interface Settings {
@@ -101,7 +103,9 @@ export interface Settings {
   maxTokens: number
   theme: "light" | "dark" | "system"
   streamingEnabled: boolean
-  showMetrics: boolean // Add this line
+  showMetrics: boolean
+  autoSaveInterval: number // Auto-save every X seconds
+  conversationView: "list" | "grid" // How to display conversations
 }
 
 /**
@@ -112,4 +116,14 @@ export interface SystemResources {
   memoryUsage?: number
   modelSize?: string
   quantization?: string
+}
+
+/**
+ * Export format for conversations
+ */
+export interface ExportData {
+  version: string
+  exportDate: Date
+  conversations: Conversation[]
+  settings?: Partial<Settings>
 }
