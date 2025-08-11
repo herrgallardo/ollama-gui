@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
   SelectContent,
@@ -17,6 +16,8 @@ import { useChatStore } from "@/lib/store"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import MetricsDisplay from "@/components/MetricsDisplay"
+import OllamaStatusIndicator from "@/components/OllamaStatusIndicator"
+import type { OllamaStatus } from "@/app/api/ollama/status/route"
 import {
   Send,
   StopCircle,
@@ -65,6 +66,7 @@ export default function Chat() {
   const [input, setInput] = useState("")
   const [models, setModels] = useState<OllamaModel[]>([])
   const [modelsLoaded, setModelsLoaded] = useState(false)
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -72,8 +74,31 @@ export default function Chat() {
   // Find current model info
   const currentModelInfo = models.find((m) => m.name === selectedModel)
 
+  // Handle Ollama status changes
+  const handleOllamaStatusChange = useCallback(
+    (status: OllamaStatus) => {
+      setOllamaStatus(status)
+
+      // Clear error if Ollama is now connected
+      if (status.status === "connected" && error?.includes("Ollama")) {
+        setError(null)
+      }
+
+      // Set error if Ollama is not available and we don't have models
+      if (status.status !== "connected" && models.length === 0) {
+        setError(status.message)
+      }
+    },
+    [error, models.length, setError]
+  )
+
   // Fetch models
   const fetchModels = useCallback(async () => {
+    // Only fetch models if Ollama is connected
+    if (ollamaStatus?.status !== "connected") {
+      return
+    }
+
     try {
       const response = await fetch("/api/models")
       if (!response.ok) {
@@ -101,14 +126,20 @@ export default function Chat() {
       setError("Failed to fetch models. Make sure Ollama is running.")
       setModelsLoaded(true)
     }
-  }, [selectedModel, setSelectedModel, setError, hasHydrated])
+  }, [
+    ollamaStatus?.status,
+    selectedModel,
+    setSelectedModel,
+    setError,
+    hasHydrated,
+  ])
 
-  // Fetch models after hydration
+  // Fetch models when Ollama status changes to connected
   useEffect(() => {
-    if (hasHydrated) {
+    if (hasHydrated && ollamaStatus?.status === "connected") {
       fetchModels()
     }
-  }, [hasHydrated, fetchModels])
+  }, [hasHydrated, ollamaStatus?.status, fetchModels])
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -124,6 +155,12 @@ export default function Chat() {
 
   const sendMessage = async () => {
     if (!input.trim() || !selectedModel) return
+
+    // Check if Ollama is connected before sending
+    if (ollamaStatus?.status !== "connected") {
+      setError("Ollama is not connected. Please ensure Ollama is running.")
+      return
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -274,6 +311,13 @@ export default function Chat() {
     )
   }
 
+  // Check if we can send messages
+  const canSendMessage =
+    input.trim() &&
+    selectedModel &&
+    ollamaStatus?.status === "connected" &&
+    !isLoading
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -303,6 +347,12 @@ export default function Chat() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {/* Ollama Status Indicator */}
+            <OllamaStatusIndicator
+              compact
+              onStatusChange={handleOllamaStatusChange}
+            />
+
             <Button
               onClick={handleNewChat}
               variant="ghost"
@@ -335,7 +385,7 @@ export default function Chat() {
             <Select
               value={selectedModel}
               onValueChange={setSelectedModel}
-              disabled={!modelsLoaded}
+              disabled={!modelsLoaded || ollamaStatus?.status !== "connected"}
             >
               <SelectTrigger className="w-[200px] hidden sm:flex">
                 <SelectValue placeholder="Select a model" />
@@ -376,11 +426,13 @@ export default function Chat() {
                       : "Start a new conversation"}
                   </p>
                   <p>
-                    {conversations.length === 0
-                      ? "Send a message below to begin"
-                      : "Type a message or select a conversation from the sidebar"}
+                    {ollamaStatus?.status === "connected"
+                      ? conversations.length === 0
+                        ? "Send a message below to begin"
+                        : "Type a message or select a conversation from the sidebar"
+                      : "Please ensure Ollama is running to start chatting"}
                   </p>
-                  {selectedModel && (
+                  {selectedModel && ollamaStatus?.status === "connected" && (
                     <p className="text-sm mt-2 text-muted-foreground">
                       Using model: {selectedModel}
                     </p>
@@ -507,11 +559,13 @@ export default function Chat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              conversations.length === 0
-                ? "Start your first conversation..."
-                : "Type your message..."
+              ollamaStatus?.status !== "connected"
+                ? "Ollama is not connected..."
+                : conversations.length === 0
+                  ? "Start your first conversation..."
+                  : "Type your message..."
             }
-            disabled={isLoading || !selectedModel}
+            disabled={isLoading || ollamaStatus?.status !== "connected"}
             className="flex-1"
           />
           {isLoading ? (
@@ -521,19 +575,29 @@ export default function Chat() {
           ) : (
             <Button
               onClick={sendMessage}
-              disabled={!input.trim() || !selectedModel}
+              disabled={!canSendMessage}
               size="icon"
             >
               <Send className="w-4 h-4" />
             </Button>
           )}
         </div>
-        {!selectedModel && models.length === 0 && modelsLoaded && (
-          <p className="text-center text-sm text-muted-foreground mt-2">
-            No models found. Make sure Ollama is running and has models
-            installed.
-          </p>
-        )}
+
+        {/* Status messages */}
+        <div className="max-w-4xl mx-auto mt-2">
+          {ollamaStatus?.status !== "connected" && (
+            <p className="text-center text-sm text-muted-foreground">
+              {ollamaStatus?.message || "Checking Ollama connection..."}
+            </p>
+          )}
+          {ollamaStatus?.status === "connected" &&
+            models.length === 0 &&
+            modelsLoaded && (
+              <p className="text-center text-sm text-muted-foreground">
+                No models found. Install models with: ollama pull llama2
+              </p>
+            )}
+        </div>
       </div>
     </div>
   )
