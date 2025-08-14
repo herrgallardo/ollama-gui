@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { persist, createJSONStorage } from "zustand/middleware"
 import { Message, MessageMetrics, Conversation } from "./types"
+import { generateUniqueId } from "./helpers"
 
 interface ChatStore {
   // Conversations
@@ -15,6 +16,7 @@ interface ChatStore {
   showMetrics: boolean
   currentMetrics: MessageMetrics | null
   showSidebar: boolean
+  isSending: boolean // Added to prevent concurrent sends
 
   // Conversation Actions
   createConversation: (title?: string, model?: string) => string
@@ -39,6 +41,7 @@ interface ChatStore {
   setShowMetrics: (show: boolean) => void
   setCurrentMetrics: (metrics: MessageMetrics | null) => void
   setShowSidebar: (show: boolean) => void
+  setIsSending: (sending: boolean) => void
 
   // Import/Export
   exportConversations: () => string
@@ -66,10 +69,11 @@ export const useChatStore = create<ChatStore>()(
       showMetrics: true,
       currentMetrics: null,
       showSidebar: true,
+      isSending: false,
 
       // Conversation Actions
       createConversation: (title, model) => {
-        const id = Date.now().toString()
+        const id = generateUniqueId() // Use the better ID generator
         const newConversation: Conversation = {
           id,
           title: title || "New Chat",
@@ -137,18 +141,20 @@ export const useChatStore = create<ChatStore>()(
             state.generateTitle(message.content),
             state.selectedModel
           )
-          // Add message to the newly created conversation
-          set((state) => ({
-            conversations: state.conversations.map((conv) =>
-              conv.id === id
-                ? {
-                    ...conv,
-                    messages: [...conv.messages, message],
-                    updatedAt: new Date(),
-                  }
-                : conv
-            ),
-          }))
+          // Use setTimeout to ensure state is updated before adding message
+          setTimeout(() => {
+            set((state) => ({
+              conversations: state.conversations.map((conv) =>
+                conv.id === id
+                  ? {
+                      ...conv,
+                      messages: [...conv.messages, message],
+                      updatedAt: new Date(),
+                    }
+                  : conv
+              ),
+            }))
+          }, 0)
         } else {
           // Add to existing conversation
           state.updateConversation(currentConv.id, {
@@ -195,7 +201,7 @@ export const useChatStore = create<ChatStore>()(
           })
         }
 
-        set({ error: null, currentMetrics: null })
+        set({ error: null, currentMetrics: null, isSending: false })
       },
 
       // Search
@@ -222,6 +228,7 @@ export const useChatStore = create<ChatStore>()(
       setShowMetrics: (show) => set({ showMetrics: show }),
       setCurrentMetrics: (metrics) => set({ currentMetrics: metrics }),
       setShowSidebar: (show) => set({ showSidebar: show }),
+      setIsSending: (sending) => set({ isSending: sending }),
 
       // Import/Export
       exportConversations: () => {
@@ -247,10 +254,21 @@ export const useChatStore = create<ChatStore>()(
             throw new Error("Invalid import format")
           }
 
-          // Merge or replace based on user preference
-          // For now, we'll merge (add imported conversations)
+          // Regenerate IDs to prevent collisions
+          const conversationsWithNewIds = parsed.conversations.map(
+            (conv: Conversation) => ({
+              ...conv,
+              id: generateUniqueId(),
+              messages: conv.messages.map((msg: Message) => ({
+                ...msg,
+                id: generateUniqueId(),
+              })),
+            })
+          )
+
+          // Merge with existing conversations
           set((state) => ({
-            conversations: [...parsed.conversations, ...state.conversations],
+            conversations: [...conversationsWithNewIds, ...state.conversations],
           }))
 
           // Optionally import settings

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
+import { debounce } from "@/lib/helpers"
 import {
   MessageSquarePlus,
   Search,
@@ -44,6 +45,12 @@ export default function ConversationSidebar() {
 
   const [searchQuery, setSearchQuery] = useState("")
   const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState<string | null>(null)
+
+  // Debounced search to prevent excessive filtering
+  const debouncedSearch = debounce((query: string) => {
+    setSearchQuery(query)
+  }, 300)
 
   // Filter conversations based on search
   const filteredConversations = searchQuery
@@ -62,9 +69,19 @@ export default function ConversationSidebar() {
     setCurrentConversation(id)
   }
 
-  const handleDelete = (id: string, e: React.MouseEvent) => {
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
+
+    // Prevent multiple delete operations
+    if (isDeleting) return
+
+    setIsDeleting(id)
+
+    // Small delay for UI feedback
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
     deleteConversation(id)
+    setIsDeleting(null)
   }
 
   const handlePin = (id: string, isPinned: boolean) => {
@@ -72,14 +89,18 @@ export default function ConversationSidebar() {
   }
 
   const handleExport = () => {
-    const data = exportConversations()
-    const blob = new Blob([data], { type: "application/json" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `ollama-conversations-${new Date().toISOString().split("T")[0]}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    try {
+      const data = exportConversations()
+      const blob = new Blob([data], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `ollama-conversations-${new Date().toISOString().split("T")[0]}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error("Export failed:", error)
+    }
   }
 
   const handleImport = () => {
@@ -89,10 +110,14 @@ export default function ConversationSidebar() {
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0]
       if (file) {
-        const text = await file.text()
-        const success = importConversations(text)
-        if (success) {
-          console.log("Conversations imported successfully")
+        try {
+          const text = await file.text()
+          const success = importConversations(text)
+          if (success) {
+            console.log("Conversations imported successfully")
+          }
+        } catch (error) {
+          console.error("Import failed:", error)
         }
       }
     }
@@ -119,6 +144,10 @@ export default function ConversationSidebar() {
     } else {
       return d.toLocaleDateString()
     }
+  }
+
+  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    debouncedSearch(e.target.value)
   }
 
   if (!showSidebar) return null
@@ -154,8 +183,7 @@ export default function ConversationSidebar() {
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search conversations..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={handleSearch}
             className="pl-8 h-9"
           />
         </div>
@@ -167,8 +195,16 @@ export default function ConversationSidebar() {
           {sortedConversations.length === 0 ? (
             <div className="text-center text-muted-foreground py-8">
               <MessageSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No conversations yet</p>
-              <p className="text-xs mt-1">Start a new chat to begin</p>
+              <p className="text-sm">
+                {searchQuery
+                  ? "No conversations found"
+                  : "No conversations yet"}
+              </p>
+              <p className="text-xs mt-1">
+                {searchQuery
+                  ? "Try a different search"
+                  : "Start a new chat to begin"}
+              </p>
             </div>
           ) : (
             sortedConversations.map((conv) => (
@@ -178,7 +214,8 @@ export default function ConversationSidebar() {
                   "group relative flex items-center gap-2 rounded-md px-2 py-2 text-sm cursor-pointer transition-colors",
                   "hover:bg-accent hover:text-accent-foreground",
                   currentConversationId === conv.id &&
-                    "bg-accent text-accent-foreground"
+                    "bg-accent text-accent-foreground",
+                  isDeleting === conv.id && "opacity-50 pointer-events-none"
                 )}
                 onClick={() => setCurrentConversation(conv.id)}
                 onMouseEnter={() => setHoveredId(conv.id)}
@@ -241,9 +278,10 @@ export default function ConversationSidebar() {
                             e.stopPropagation()
                             handleDelete(conv.id, e)
                           }}
+                          disabled={isDeleting === conv.id}
                         >
                           <Trash2 className="mr-2 h-4 w-4" />
-                          Delete
+                          {isDeleting === conv.id ? "Deleting..." : "Delete"}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>

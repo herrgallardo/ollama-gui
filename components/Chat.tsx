@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select"
 import { Message, OllamaModel, MessageMetrics } from "@/lib/types"
 import { useChatStore } from "@/lib/store"
+import { generateUniqueId, safeAbort } from "@/lib/helpers"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import MetricsDisplay from "@/components/MetricsDisplay"
@@ -42,6 +43,7 @@ export default function Chat() {
     showMetrics,
     currentMetrics,
     showSidebar,
+    isSending,
     getCurrentConversation,
     createConversation,
     addMessage,
@@ -53,6 +55,7 @@ export default function Chat() {
     setShowMetrics,
     setCurrentMetrics,
     setShowSidebar,
+    setIsSending,
   } = useChatStore()
 
   // Get current conversation and messages
@@ -146,15 +149,28 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
+  // Clean up abort controller on unmount
+  useEffect(() => {
+    return () => {
+      safeAbort(abortControllerRef.current)
+    }
+  }, [])
+
   const handleNewChat = () => {
+    // Abort any ongoing streaming
+    safeAbort(abortControllerRef.current)
+    abortControllerRef.current = null
+
     createConversation("New Chat", selectedModel)
     setInput("")
     setError(null)
     setCurrentMetrics(null)
+    setIsSending(false)
   }
 
   const sendMessage = async () => {
-    if (!input.trim() || !selectedModel) return
+    // Prevent concurrent sends
+    if (isSending || !input.trim() || !selectedModel) return
 
     // Check if Ollama is connected before sending
     if (ollamaStatus?.status !== "connected") {
@@ -162,8 +178,11 @@ export default function Chat() {
       return
     }
 
+    // Mark as sending
+    setIsSending(true)
+
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: generateUniqueId(), // Use the better ID generator
       role: "user",
       content: input.trim(),
       timestamp: new Date(),
@@ -174,10 +193,10 @@ export default function Chat() {
     setInput("")
     setLoading(true)
     setError(null)
-    setCurrentMetrics(null) // Clear previous metrics
+    setCurrentMetrics(null)
 
     const assistantMessage: Message = {
-      id: (Date.now() + 1).toString(),
+      id: generateUniqueId(), // Use the better ID generator
       role: "assistant",
       content: "",
       timestamp: new Date(),
@@ -274,29 +293,37 @@ export default function Chat() {
       if (error instanceof Error) {
         if (error.name === "AbortError") {
           console.log("Request aborted")
-          updateMessage(assistantMessage.id, { isStreaming: false })
+          updateMessage(assistantMessage.id, {
+            isStreaming: false,
+            content: assistantMessage.content || "Message cancelled.",
+          })
         } else {
           console.error("Error sending message:", error)
           setError(error.message || "Failed to send message")
+          updateMessage(assistantMessage.id, {
+            isStreaming: false,
+            content: "Failed to generate response. Please try again.",
+          })
         }
       }
     } finally {
       setLoading(false)
       setCurrentMetrics(null)
+      setIsSending(false)
       abortControllerRef.current = null
     }
   }
 
   const stopStreaming = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      setLoading(false)
-      setCurrentMetrics(null)
-    }
+    safeAbort(abortControllerRef.current)
+    abortControllerRef.current = null
+    setLoading(false)
+    setCurrentMetrics(null)
+    setIsSending(false)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !isSending) {
       e.preventDefault()
       sendMessage()
     }
@@ -316,7 +343,8 @@ export default function Chat() {
     input.trim() &&
     selectedModel &&
     ollamaStatus?.status === "connected" &&
-    !isLoading
+    !isLoading &&
+    !isSending
 
   return (
     <div className="flex flex-col h-full">
@@ -377,7 +405,7 @@ export default function Chat() {
               onClick={clearCurrentMessages}
               variant="ghost"
               size="icon"
-              disabled={messages.length === 0 || isLoading}
+              disabled={messages.length === 0 || isLoading || isSending}
               title="Clear current chat"
             >
               <Trash2 className="w-4 h-4" />
@@ -385,7 +413,11 @@ export default function Chat() {
             <Select
               value={selectedModel}
               onValueChange={setSelectedModel}
-              disabled={!modelsLoaded || ollamaStatus?.status !== "connected"}
+              disabled={
+                !modelsLoaded ||
+                ollamaStatus?.status !== "connected" ||
+                isSending
+              }
             >
               <SelectTrigger className="w-[200px] hidden sm:flex">
                 <SelectValue placeholder="Select a model" />
@@ -559,13 +591,17 @@ export default function Chat() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              ollamaStatus?.status !== "connected"
-                ? "Ollama is not connected..."
-                : conversations.length === 0
-                  ? "Start your first conversation..."
-                  : "Type your message..."
+              isSending
+                ? "Sending message..."
+                : ollamaStatus?.status !== "connected"
+                  ? "Ollama is not connected..."
+                  : conversations.length === 0
+                    ? "Start your first conversation..."
+                    : "Type your message..."
             }
-            disabled={isLoading || ollamaStatus?.status !== "connected"}
+            disabled={
+              isLoading || ollamaStatus?.status !== "connected" || isSending
+            }
             className="flex-1"
           />
           {isLoading ? (
